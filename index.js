@@ -86,3 +86,44 @@ bot.on('photo', async (msg) => {
     }
   
 });
+
+bot.on('video', async (msg) => {
+    const chatId = msg.chat.id;
+    bot.sendMessage(chatId, "Received");
+
+    const fileId = msg.video.file_id;
+
+    try {
+        const file = await bot.getFile(fileId);
+
+        const fileUrl = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
+
+        const filepath = path.join(__dirname, `${fileId}.mp4`);
+
+        const fileStream = fs.createWriteStream(filepath);
+
+        https.get(fileUrl, (res) => {
+            res.pipe(fileStream);
+            fileStream.on('finish', () => {
+                (async () => {
+                    try {
+                        fileStream.close();
+                        console.log("Download complete.");
+
+                        const result = await cloudinary.uploader.upload(filepath, {
+                            resource_type: "video"
+                        });
+                        console.log("Uploaded to Cloudinary:", result);
+
+                        fs.unlinkSync(filepath);
+                        bot.sendMessage(chatId, "Deleted Local store");
+                    } catch (uploadErr) {
+                        console.error("Cloudinary upload error:", uploadErr);
+                    }
+                })();
+            });
+        });
+    } catch (err) {
+        console.error("Error:", err);
+    }
+});
