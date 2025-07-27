@@ -5,12 +5,14 @@ const cloudinary = require("cloudinary").v2;
 const https = require("https");
 const fs = require("fs");
 const path = require("path");
-const fetch = require("node-fetch");
 const cheerio = require("cheerio");
+
+// Use native fetch if Node >=18, else fallback to node-fetch
+let fetch = global.fetch;
+if (!fetch) fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
 
 const app = express();
 const PORT = 3000;
-
 const token = process.env.TOKEN;
 const bot = new TelegramBOT(token, { polling: true });
 
@@ -21,11 +23,9 @@ cloudinary.config({
   secure: true
 });
 
-app.listen(PORT, () => {
-  console.log("✅ Server running on port", PORT);
-});
+app.listen(PORT, () => console.log("✅ Server running on port", PORT));
 
-// Upload photo from Telegram to Cloudinary
+// Handle photo upload
 bot.on("photo", async (msg) => {
   const chatId = msg.chat.id;
   const fileId = msg.photo[msg.photo.length - 1].file_id;
@@ -43,7 +43,7 @@ bot.on("photo", async (msg) => {
       try {
         const result = await cloudinary.uploader.upload(filepath);
         fs.unlinkSync(filepath);
-        bot.sendMessage(chatId, `✅ Uploaded to Cloudinary: ${result.secure_url}`);
+        bot.sendMessage(chatId, `✅ Uploaded to Cloudinary:\n${result.secure_url}`);
       } catch (err) {
         console.error("Upload error:", err);
         bot.sendMessage(chatId, "❌ Upload failed.");
@@ -52,7 +52,7 @@ bot.on("photo", async (msg) => {
   });
 });
 
-// Upload video from Telegram to Cloudinary
+// Handle video upload
 bot.on("video", async (msg) => {
   const chatId = msg.chat.id;
   const fileId = msg.video.file_id;
@@ -72,7 +72,7 @@ bot.on("video", async (msg) => {
           resource_type: "video"
         });
         fs.unlinkSync(filepath);
-        bot.sendMessage(chatId, `✅ Uploaded to Cloudinary: ${result.secure_url}`);
+        bot.sendMessage(chatId, `✅ Uploaded to Cloudinary:\n${result.secure_url}`);
       } catch (err) {
         console.error("Upload error:", err);
         bot.sendMessage(chatId, "❌ Upload failed.");
@@ -81,7 +81,7 @@ bot.on("video", async (msg) => {
   });
 });
 
-// /send folder_name
+// /send <foldername> command
 bot.onText(/\/send (.+)/, async (msg, match) => {
   const chatId = msg.chat.id;
   const folderName = match[1].trim();
@@ -96,8 +96,8 @@ bot.onText(/\/send (.+)/, async (msg, match) => {
       .execute();
 
     const media = result.resources;
-    if (media.length === 0) {
-      bot.sendMessage(chatId, `❌ No media found in folder "${folderName}".`);
+    if (!media.length) {
+      bot.sendMessage(chatId, `❌ No media found in "${folderName}".`);
       return;
     }
 
@@ -110,51 +110,50 @@ bot.onText(/\/send (.+)/, async (msg, match) => {
     } else if (type === "video") {
       bot.sendVideo(chatId, fileUrl, { caption: `📂 From folder: ${folderName}` });
     } else {
-      bot.sendMessage(chatId, `❓ Unsupported media type: ${type}`);
+      bot.sendMessage(chatId, `🧾 File URL: ${fileUrl}`);
     }
   } catch (error) {
-    console.error("Search error:", error);
-    bot.sendMessage(chatId, "⚠️ Could not fetch media. Try again.");
+    console.error("Cloudinary error:", error);
+    bot.sendMessage(chatId, "⚠️ Could not fetch media.");
   }
 });
 
-// Handle keyword search (NO cloudinary upload)
+// Keyword-based image scraping (NO cloudinary upload)
 bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text?.trim();
   if (!text || text.startsWith("/")) return;
 
-  bot.sendMessage(chatId, `🔍 Searching for media: "${text}"...`);
+  bot.sendMessage(chatId, `🔎 Searching for: "${text}"...`);
 
   try {
     const searchUrl = `https://duckduckgo.com/?q=${encodeURIComponent(text)}&iax=images&ia=images`;
     const res = await fetch(searchUrl, {
       headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0 Safari/537.36",
-      },
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/115 Safari/537.36"
+      }
     });
 
     const html = await res.text();
     const $ = cheerio.load(html);
+    const images = [];
 
-    const imageUrls = [];
-    $("img").each((i, el) => {
+    $("img").each((_, el) => {
       const src = $(el).attr("src") || $(el).attr("data-src");
-      if (src && src.startsWith("http")) imageUrls.push(src);
+      if (src && src.startsWith("http")) images.push(src);
     });
 
-    if (imageUrls.length === 0) {
+    if (!images.length) {
       bot.sendMessage(chatId, "❌ No images found.");
       return;
     }
 
-    const topImages = imageUrls.slice(0, 3);
+    const topImages = images.slice(0, 3);
     for (const url of topImages) {
-      await bot.sendPhoto(chatId, url, { caption: `🖼️ From search: ${text}` });
+      await bot.sendPhoto(chatId, url, { caption: `🖼️ From keyword: ${text}` });
     }
   } catch (err) {
-    console.error("Scrape error:", err);
-    bot.sendMessage(chatId, "⚠️ Could not scrape content.");
+    console.error("Scraping error:", err);
+    bot.sendMessage(chatId, "⚠️ Error while searching.");
   }
 });
